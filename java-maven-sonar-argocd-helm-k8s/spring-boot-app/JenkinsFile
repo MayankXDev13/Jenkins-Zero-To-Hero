@@ -42,15 +42,40 @@ pipeline {
     
     stage('Pre-Build Cleanup') {
       steps {
-        echo '🧹 Cleaning up Docker resources'
+        echo '🧹 Aggressive cleanup to free disk space'
         sh '''
-          # Clean up Docker resources to free space
-          docker system prune -f || true
-          docker image prune -f || true
-          
-          # Show available disk space
-          echo "=== Available Disk Space ==="
+          # Show current disk usage
+          echo "=== Current Disk Usage ==="
           df -h
+          
+          # More aggressive Docker cleanup
+          docker system prune -a -f --volumes || true
+          docker container prune -f || true
+          docker image prune -a -f || true
+          docker volume prune -f || true
+          docker network prune -f || true
+          
+          # Remove all stopped containers
+          docker rm $(docker ps -a -q) || true
+          
+          # Remove all dangling images
+          docker rmi $(docker images -f "dangling=true" -q) || true
+          
+          # Clean package cache
+          apt-get clean
+          rm -rf /var/lib/apt/lists/*
+          
+          # Clean temporary files
+          rm -rf /tmp/*
+          rm -rf /var/tmp/*
+          
+          # Show disk usage after cleanup
+          echo "=== Disk Usage After Cleanup ==="
+          df -h
+          
+          # Show Docker disk usage
+          echo "=== Docker Disk Usage ==="
+          docker system df || true
         '''
       }
     }
@@ -90,17 +115,37 @@ pipeline {
     stage('Build and Push Docker Image') {
       steps {
         echo '🐳 Building and pushing Docker image'
+        sh '''
+          # Check available space before build
+          echo "=== Pre-Build Disk Check ==="
+          df -h
+          
+          # Use a smaller base image if possible
+          cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
+          
+          # Build with no-cache to avoid layer caching issues
+          docker build --no-cache -t ${DOCKER_IMAGE} .
+          
+          # Show disk usage after build
+          echo "=== Post-Build Disk Usage ==="
+          df -h
+        '''
+        
         script {
           try {
-            def dockerImage = docker.build("${DOCKER_IMAGE}", "java-maven-sonar-argocd-helm-k8s/spring-boot-app")
             docker.withRegistry('https://index.docker.io/v1/', 'docker-cred') {
+              def dockerImage = docker.image("${DOCKER_IMAGE}")
               dockerImage.push()
               dockerImage.push('latest')
             }
             echo "✅ Docker image pushed successfully: ${DOCKER_IMAGE}"
+            
+            // Clean up local image after push
+            sh "docker rmi ${DOCKER_IMAGE} || true"
+            
           } catch (Exception e) {
             currentBuild.result = 'FAILURE'
-            error "❌ Docker build failed: ${e.getMessage()}"
+            error "❌ Docker build/push failed: ${e.getMessage()}"
           }
         }
       }
