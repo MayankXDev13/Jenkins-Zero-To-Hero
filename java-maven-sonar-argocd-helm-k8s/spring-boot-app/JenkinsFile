@@ -1,5 +1,10 @@
 pipeline {
-  agent any
+  agent {
+    docker {
+      image 'maven:3.9.6-eclipse-temurin-17' // Maven + Java 17
+      args '-u root -v /var/run/docker.sock:/var/run/docker.sock'
+    }
+  }
 
   environment {
     SONAR_URL = "http://3.238.116.44:9000"
@@ -11,14 +16,15 @@ pipeline {
   stages {
     stage('Checkout') {
       steps {
-        sh 'echo "✅ Checkout stage passed"'
+        echo '📥 Checking out code'
+        checkout scm
       }
     }
 
     stage('Build and Test') {
       steps {
+        echo '🛠️ Building and testing the application'
         sh '''
-          echo "🛠️ Building and testing the application"
           cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
           mvn clean package -e -X
         '''
@@ -27,9 +33,9 @@ pipeline {
 
     stage('Static Code Analysis') {
       steps {
+        echo '🔍 Running SonarQube Analysis'
         withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
           sh '''
-            echo "🔎 Running SonarQube analysis"
             cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
             mvn sonar:sonar \
               -Dsonar.login=$SONAR_AUTH_TOKEN \
@@ -41,13 +47,10 @@ pipeline {
 
     stage('Build and Push Docker Image') {
       steps {
+        echo '🐳 Building and pushing Docker image'
         script {
-          echo "🐳 Building Docker image: ${DOCKER_IMAGE}"
-          sh "docker build -t ${DOCKER_IMAGE} java-maven-sonar-argocd-helm-k8s/spring-boot-app"
-
-          echo "📤 Pushing Docker image to Docker Hub"
+          def dockerImage = docker.build("${DOCKER_IMAGE}", "java-maven-sonar-argocd-helm-k8s/spring-boot-app")
           docker.withRegistry('https://index.docker.io/v1/', 'docker-cred') {
-            def dockerImage = docker.image("${DOCKER_IMAGE}")
             dockerImage.push()
           }
         }
@@ -56,14 +59,14 @@ pipeline {
 
     stage('Update Deployment File') {
       steps {
+        echo '📦 Updating Kubernetes deployment file'
         withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
           sh '''
-            echo "📦 Updating deployment YAML with image tag"
             git config user.email "abhishek.xyz@gmail.com"
             git config user.name "Abhishek Veeramalla"
             sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
             git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
-            git commit -m "Update deployment image to version ${BUILD_NUMBER}" || echo "⚠️ No changes to commit"
+            git commit -m "Update deployment image to version ${BUILD_NUMBER}" || echo "No changes to commit"
             git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main
           '''
         }
