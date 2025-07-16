@@ -1,36 +1,53 @@
 pipeline {
   agent {
     docker {
-      image 'maven:3.9.6-eclipse-temurin-17' // Maven + Java 17
+      image 'maven:3.9.6-eclipse-temurin-17'
       args '-u root -v /var/run/docker.sock:/var/run/docker.sock'
     }
   }
-
+  
   environment {
     SONAR_URL = "http://3.238.116.44:9000"
     DOCKER_IMAGE = "abhishekf5/ultimate-cicd:${BUILD_NUMBER}"
     GIT_REPO_NAME = "Jenkins-Zero-To-Hero"
     GIT_USER_NAME = "iam-veeramalla"
   }
-
+  
   stages {
+    stage('Install Docker') {
+      steps {
+        echo '🐳 Installing Docker in container'
+        sh '''
+          apt-get update
+          apt-get install -y docker.io curl
+          docker --version
+        '''
+      }
+    }
+    
     stage('Checkout') {
       steps {
         echo '📥 Checking out code'
         checkout scm
       }
     }
-
+    
     stage('Build and Test') {
       steps {
         echo '🛠️ Building and testing the application'
         sh '''
           cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
-          mvn clean package -e -X
+          mvn clean compile test package -e
         '''
       }
+      post {
+        always {
+          // Archive test results
+          publishTestResults testResultsPattern: 'java-maven-sonar-argocd-helm-k8s/spring-boot-app/target/surefire-reports/*.xml'
+        }
+      }
     }
-
+    
     stage('Static Code Analysis') {
       steps {
         echo '🔍 Running SonarQube Analysis'
@@ -39,38 +56,92 @@ pipeline {
             cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
             mvn sonar:sonar \
               -Dsonar.login=$SONAR_AUTH_TOKEN \
-              -Dsonar.host.url=$SONAR_URL
+              -Dsonar.host.url=$SONAR_URL \
+              -Dsonar.projectKey=ultimate-cicd \
+              -Dsonar.projectName=ultimate-cicd
           '''
         }
       }
     }
-
+    
     stage('Build and Push Docker Image') {
       steps {
         echo '🐳 Building and pushing Docker image'
         script {
-          def dockerImage = docker.build("${DOCKER_IMAGE}", "java-maven-sonar-argocd-helm-k8s/spring-boot-app")
-          docker.withRegistry('https://index.docker.io/v1/', 'docker-cred') {
-            dockerImage.push()
+          try {
+            def dockerImage = docker.build("${DOCKER_IMAGE}", "java-maven-sonar-argocd-helm-k8s/spring-boot-app")
+            docker.withRegistry('https://index.docker.io/v1/', 'docker-cred') {
+              dockerImage.push()
+              dockerImage.push('latest')
+            }
+            echo "✅ Docker image pushed successfully: ${DOCKER_IMAGE}"
+          } catch (Exception e) {
+            currentBuild.result = 'FAILURE'
+            error "❌ Docker build failed: ${e.getMessage()}"
           }
         }
       }
     }
-
+    
     stage('Update Deployment File') {
       steps {
         echo '📦 Updating Kubernetes deployment file'
         withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
           sh '''
-            git config user.email "abhishek.xyz@gmail.com"
-            git config user.name "Abhishek Veeramalla"
-            sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
-            git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
-            git commit -m "Update deployment image to version ${BUILD_NUMBER}" || echo "No changes to commit"
-            git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main
+            # Configure git
+            git config --global user.email "abhishek.xyz@gmail.com"
+            git config --global user.name "Abhishek Veeramalla"
+            git config --global --add safe.directory $WORKSPACE
+            
+            # Check if deployment file exists
+            DEPLOYMENT_FILE="java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml"
+            
+            if [ -f "$DEPLOYMENT_FILE" ]; then
+              echo "📄 Found deployment file: $DEPLOYMENT_FILE"
+              
+              # Show current content
+              echo "Current deployment file content:"
+              cat "$DEPLOYMENT_FILE"
+              
+              # Update image tag
+              sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" "$DEPLOYMENT_FILE"
+              
+              # Show updated content
+              echo "Updated deployment file content:"
+              cat "$DEPLOYMENT_FILE"
+              
+              # Stage changes
+              git add "$DEPLOYMENT_FILE"
+              
+              # Check if there are changes to commit
+              if git diff --staged --quiet; then
+                echo "ℹ️ No changes to commit"
+              else
+                # Commit and push changes
+                git commit -m "🚀 Update deployment image to version ${BUILD_NUMBER}"
+                git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main
+                echo "✅ Successfully updated deployment file"
+              fi
+            else
+              echo "❌ Deployment file not found: $DEPLOYMENT_FILE"
+              exit 1
+            fi
           '''
         }
       }
+    }
+  }
+  
+  post {
+    always {
+      echo '🧹 Cleaning up'
+      sh 'docker system prune -f || true'
+    }
+    success {
+      echo '✅ Pipeline completed successfully!'
+    }
+    failure {
+      echo '❌ Pipeline failed!'
     }
   }
 }
