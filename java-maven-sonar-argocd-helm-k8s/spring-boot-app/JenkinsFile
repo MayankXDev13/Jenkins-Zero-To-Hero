@@ -43,7 +43,7 @@ pipeline {
       post {
         always {
           // Archive test results
-          publishTestResults testResultsPattern: 'java-maven-sonar-argocd-helm-k8s/spring-boot-app/target/surefire-reports/*.xml'
+          junit testResultsPattern: 'java-maven-sonar-argocd-helm-k8s/spring-boot-app/target/surefire-reports/*.xml', allowEmptyResults: true
         }
       }
     }
