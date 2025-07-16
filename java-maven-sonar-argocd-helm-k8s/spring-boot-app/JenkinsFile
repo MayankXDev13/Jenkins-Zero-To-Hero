@@ -14,19 +14,10 @@ pipeline {
   }
   
   stages {
-    stage('Pre-Build Cleanup') {
+    stage('Checkout') {
       steps {
-        echo '🧹 Cleaning up Docker resources'
-        sh '''
-          # Clean up Docker resources to free space
-          docker system prune -f || true
-          docker image prune -f || true
-          
-          # Show disk usage
-          df -h
-          echo "Available disk space after cleanup:"
-          df -h /var/lib/docker/
-        '''
+        echo '📥 Checking out code'
+        checkout scm
       }
     }
     
@@ -37,14 +28,30 @@ pipeline {
           apt-get update
           apt-get install -y docker.io curl
           docker --version
+          
+          # Show disk usage after Docker installation
+          echo "=== Disk Usage ==="
+          df -h
+          
+          # Clean up Docker resources if any exist
+          docker system prune -f || true
+          docker image prune -f || true
         '''
       }
     }
     
-    stage('Checkout') {
+    stage('Pre-Build Cleanup') {
       steps {
-        echo '📥 Checking out code'
-        checkout scm
+        echo '🧹 Cleaning up Docker resources'
+        sh '''
+          # Clean up Docker resources to free space
+          docker system prune -f || true
+          docker image prune -f || true
+          
+          # Show available disk space
+          echo "=== Available Disk Space ==="
+          df -h
+        '''
       }
     }
     
