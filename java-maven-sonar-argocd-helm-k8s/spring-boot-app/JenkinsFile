@@ -14,6 +14,22 @@ pipeline {
   }
   
   stages {
+    stage('Pre-Build Cleanup') {
+      steps {
+        echo '🧹 Cleaning up Docker resources'
+        sh '''
+          # Clean up Docker resources to free space
+          docker system prune -f || true
+          docker image prune -f || true
+          
+          # Show disk usage
+          df -h
+          echo "Available disk space after cleanup:"
+          df -h /var/lib/docker/
+        '''
+      }
+    }
+    
     stage('Install Docker') {
       steps {
         echo '🐳 Installing Docker in container'
@@ -135,7 +151,17 @@ pipeline {
   post {
     always {
       echo '🧹 Cleaning up'
-      sh 'docker system prune -f || true'
+      sh '''
+        # Clean up Docker resources
+        docker system prune -f || true
+        docker image prune -f || true
+        
+        # Remove any dangling images
+        docker rmi $(docker images -f "dangling=true" -q) || true
+        
+        # Show final disk usage
+        df -h
+      '''
     }
     success {
       echo '✅ Pipeline completed successfully!'
