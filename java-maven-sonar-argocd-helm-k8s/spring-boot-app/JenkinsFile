@@ -11,14 +11,14 @@ pipeline {
   stages {
     stage('Checkout') {
       steps {
-        sh 'echo Checkout stage passed'
+        echo "Checkout stage passed"
       }
     }
 
     stage('Build and Test') {
       steps {
         sh '''
-          ls -ltr
+          echo "Building and testing the application"
           cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
           mvn clean package -e -X
         '''
@@ -29,6 +29,7 @@ pipeline {
       steps {
         withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
           sh '''
+            echo "Running SonarQube Analysis"
             cd java-maven-sonar-argocd-helm-k8s/spring-boot-app
             mvn sonar:sonar \
               -Dsonar.login=$SONAR_AUTH_TOKEN \
@@ -41,9 +42,11 @@ pipeline {
     stage('Build and Push Docker Image') {
       steps {
         script {
+          echo "Building Docker image: ${DOCKER_IMAGE}"
           def dockerImage = docker.build("${DOCKER_IMAGE}", "java-maven-sonar-argocd-helm-k8s/spring-boot-app")
           docker.withRegistry('https://index.docker.io/v1/', 'docker-cred') {
             dockerImage.push()
+            echo "Docker image pushed successfully"
           }
         }
       }
@@ -53,15 +56,27 @@ pipeline {
       steps {
         withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
           sh '''
+            echo "Updating deployment manifest"
             git config user.email "abhishek.xyz@gmail.com"
             git config user.name "Abhishek Veeramalla"
+
             sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
+
             git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
             git commit -m "Update deployment image to version ${BUILD_NUMBER}" || echo "No changes to commit"
             git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main
           '''
         }
       }
+    }
+  }
+
+  post {
+    success {
+      echo "Pipeline completed successfully!"
+    }
+    failure {
+      echo "Pipeline failed. Check logs above."
     }
   }
 }
